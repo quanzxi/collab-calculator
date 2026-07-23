@@ -2,10 +2,13 @@
 // main.dart
 // ==========================================
 import 'package:flutter/material.dart';
+import 'dart:io';
 import 'dart:ui';
 import 'package:intl/intl.dart';
 import 'package:flutter/services.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:excel/excel.dart' as excel_lib;
+import 'package:path_provider/path_provider.dart';
 import 'config.dart';
 import 'settings_screen.dart';
 
@@ -19,17 +22,17 @@ void main() async {
       visualDensity: VisualDensity.compact,
       textTheme: const TextTheme(bodyMedium: TextStyle(color: Colors.white)),
     ),
-    home: const VolumeEstimator(),
+    home: const VolumeCalculatorApp(),
   ));
 }
 
-class VolumeEstimator extends StatefulWidget {
-  const VolumeEstimator({super.key});
+class VolumeCalculatorApp extends StatefulWidget {
+  const VolumeCalculatorApp({super.key});
   @override
-  State<VolumeEstimator> createState() => _VolumeEstimatorState();
+  State<VolumeCalculatorApp> createState() => _VolumeCalculatorAppState();
 }
 
-class _VolumeEstimatorState extends State<VolumeEstimator> {
+class _VolumeCalculatorAppState extends State<VolumeCalculatorApp> {
   final _formKey = GlobalKey<FormState>();
   final _lenCtrl = TextEditingController();
   final _widCtrl = TextEditingController();
@@ -41,6 +44,7 @@ class _VolumeEstimatorState extends State<VolumeEstimator> {
   bool _isButtonPressed = false;
   
   bool _isMetric = true;
+  bool _needsPainting = false;
 
   @override
   void dispose() {
@@ -67,81 +71,179 @@ class _VolumeEstimatorState extends State<VolumeEstimator> {
     final unitLabel = _isMetric ? 'mm' : 'in';
     final reportText = """
 === Castculator Manufacturing Quote ===
-Total Production Cost: \$${_currencyFormat.format(_results!['grandTotal']!)}
-Dimensions: ${_results!['len']} x ${_results!['wid']} x ${_results!['hgt']} $unitLabel
-Quantity Ordered: ${_results!['qty']?.toInt()} units
-Total Molds Needed: ${_results!['molds']?.toInt()}
+Price Per Piece: \$${_currencyFormat.format(_results?['pricePerPiece'] ?? 0.0)}
+Total Production Cost: \$${_currencyFormat.format(_results?['grandTotal'] ?? 0.0)}
+Dimensions: ${_results?['len']} x ${_results?['wid']} x ${_results?['hgt']} $unitLabel
+Quantity Ordered: ${_results?['qty']?.toInt()} units
+Painting Required: ${_needsPainting ? 'Yes' : 'No'}
+Total Molds Needed: ${_results?['molds']?.toInt()}
 
 [Silicone Details]
-Material Cost: \$${_currencyFormat.format(_results!['sMat']!)}
-Labor Cost: \$${_currencyFormat.format(_results!['sLab']!)}
-Subtotal: \$${_currencyFormat.format(_results!['sTot']!)}
+Material Cost: \$${_currencyFormat.format(_results?['sMat'] ?? 0.0)}
+Labor Cost: \$${_currencyFormat.format(_results?['sLab'] ?? 0.0)}
+Subtotal: \$${_currencyFormat.format(_results?['sTot'] ?? 0.0)}
 
 [Urethane Details]
-Material Cost: \$${_currencyFormat.format(_results!['uMat']!)}
-Labor Cost: \$${_currencyFormat.format(_results!['uLab']!)}
-Subtotal: \$${_currencyFormat.format(_results!['uTot']!)}
+Material Cost: \$${_currencyFormat.format(_results?['uMat'] ?? 0.0)}
+Labor Cost: \$${_currencyFormat.format(_results?['uLab'] ?? 0.0)}
+Subtotal: \$${_currencyFormat.format(_results?['uTot'] ?? 0.0)}
+
+[Finishing & Post-Processing]
+Paint Cost: \$${_currencyFormat.format(_results?['paintTot'] ?? 0.0)}
 """;
 
     Share.share(reportText, subject: 'Castculator Production Quote');
+  }
+
+  Future<void> _exportToExcel() async {
+    if (AppConfig.historyList.isEmpty) return;
+
+    var excel = excel_lib.Excel.createExcel();
+    excel_lib.Sheet sheetObject = excel['History Log'];
+    excel.delete('Sheet1'); // Remove default sheet
+
+    // Add Headers
+    sheetObject.appendRow([
+      excel_lib.TextCellValue('Timestamp'),
+      excel_lib.TextCellValue('Length'),
+      excel_lib.TextCellValue('Width'),
+      excel_lib.TextCellValue('Height'),
+      excel_lib.TextCellValue('Unit'),
+      excel_lib.TextCellValue('Quantity'),
+      excel_lib.TextCellValue('Total Cost (\$)'),
+    ]);
+
+    // Add History Rows
+    for (var item in AppConfig.historyList) {
+      sheetObject.appendRow([
+        excel_lib.TextCellValue(item.timestamp),
+        excel_lib.DoubleCellValue(item.length),
+        excel_lib.DoubleCellValue(item.width),
+        excel_lib.DoubleCellValue(item.height),
+        excel_lib.TextCellValue(item.isMetric ? 'mm' : 'in'),
+        excel_lib.IntCellValue(item.quantity),
+        excel_lib.DoubleCellValue(double.parse(item.totalCost.toStringAsFixed(2))),
+      ]);
+    }
+
+    // Save and Share File
+    final fileBytes = excel.save();
+    if (fileBytes != null) {
+      final directory = await getTemporaryDirectory();
+      final filePath = "${directory.path}/Castculator_History.xlsx";
+      final file = File(filePath);
+      await file.writeAsBytes(fileBytes);
+
+      await Share.shareXFiles(
+        [XFile(filePath)],
+        text: 'Castculator Calculation History Tracking Log',
+      );
+    }
   }
 
   void _showHistory() {
     final isDark = AppConfig.isDarkMode;
     showDialog(
       context: context,
-      builder: (context) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
+      builder: (context) => BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 5, sigmaY: 5),
+        child: Dialog(
           backgroundColor: isDark ? const Color(0xFF070B14) : Colors.white,
-          title: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text("Calculation History", style: TextStyle(color: isDark ? Colors.white : Colors.black87, fontSize: 16)),
-              if (AppConfig.historyList.isNotEmpty)
-                TextButton(
-                  onPressed: () async {
-                    await AppConfig.clearHistory();
-                    setDialogState(() {});
-                    setState(() {});
-                  },
-                  child: const Text("CLEAR", style: TextStyle(color: Colors.redAccent, fontSize: 11)),
-                ),
-            ],
-          ),
-          content: SizedBox(
-            width: double.maxFinite,
-            height: 350,
-            child: AppConfig.historyList.isEmpty
-                ? Center(
-                    child: Text("No history recorded yet.", style: TextStyle(color: isDark ? Colors.white54 : Colors.black45)),
-                  )
-                : ListView.builder(
-                    itemCount: AppConfig.historyList.length,
-                    itemBuilder: (context, index) {
-                      final item = AppConfig.historyList[index];
-                      final unit = item.isMetric ? 'mm' : 'in';
-                      final priceStr = "\$${_currencyFormat.format(item.totalCost)}";
-                      return Card(
-                        color: isDark ? Colors.white.withOpacity(0.06) : Colors.black.withOpacity(0.04),
-                        margin: const EdgeInsets.symmetric(vertical: 4),
-                        child: ListTile(
-                          dense: true,
-                          title: Text("${item.length} x ${item.width} x ${item.height} $unit | Qty: ${item.quantity}",
-                              style: TextStyle(color: isDark ? Colors.white : Colors.black87, fontSize: 12, fontWeight: FontWeight.bold)),
-                          subtitle: Text(item.timestamp, style: TextStyle(color: isDark ? Colors.white54 : Colors.black45, fontSize: 10)),
-                          trailing: Text(priceStr, style: const TextStyle(color: Colors.blueAccent, fontWeight: FontWeight.bold, fontSize: 12)),
-                          onTap: () => _copyToClipboard(priceStr, "Price"),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(20),
+            child: StatefulBuilder(
+              builder: (context, setDialogState) => Container(
+                padding: const EdgeInsets.all(20),
+                constraints: const BoxConstraints(maxHeight: 450, maxWidth: 500),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // Header Row
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(
+                          "Calculation History",
+                          style: TextStyle(
+                            color: isDark ? Colors.white : Colors.black87,
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                          ),
                         ),
-                      );
-                    },
-                  ),
+                        if (AppConfig.historyList.isNotEmpty)
+                          Row(
+                            children: [
+                              IconButton(
+                                tooltip: "Export to Excel",
+                                icon: const Icon(Icons.table_view_outlined, color: Colors.greenAccent, size: 20),
+                                onPressed: () async {
+                                  await _exportToExcel();
+                                },
+                              ),
+                              TextButton(
+                                onPressed: () async {
+                                  await AppConfig.clearHistory();
+                                  setDialogState(() {});
+                                  setState(() {});
+                                },
+                                child: const Text("CLEAR", style: TextStyle(color: Colors.redAccent, fontSize: 11, fontWeight: FontWeight.bold)),
+                              ),
+                            ],
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+
+                    // Scrollable History Content
+                    Expanded(
+                      child: AppConfig.historyList.isEmpty
+                          ? Center(
+                              child: Text(
+                                "No history recorded yet.",
+                                style: TextStyle(color: isDark ? Colors.white54 : Colors.black45),
+                              ),
+                            )
+                          : ListView.builder(
+                              shrinkWrap: true,
+                              itemCount: AppConfig.historyList.length,
+                              itemBuilder: (context, index) {
+                                final item = AppConfig.historyList[index];
+                                final unit = item.isMetric ? 'mm' : 'in';
+                                final priceStr = "\$${_currencyFormat.format(item.totalCost)}";
+                                return Card(
+                                  color: isDark ? Colors.white.withOpacity(0.06) : Colors.black.withOpacity(0.04),
+                                  margin: const EdgeInsets.symmetric(vertical: 4),
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                  child: ListTile(
+                                    dense: true,
+                                    title: Text(
+                                      "${item.length} x ${item.width} x ${item.height} $unit | Qty: ${item.quantity}",
+                                      style: TextStyle(color: isDark ? Colors.white : Colors.black87, fontSize: 12, fontWeight: FontWeight.bold),
+                                    ),
+                                    subtitle: Text(item.timestamp, style: TextStyle(color: isDark ? Colors.white54 : Colors.black45, fontSize: 10)),
+                                    trailing: Text(priceStr, style: const TextStyle(color: Colors.blueAccent, fontWeight: FontWeight.bold, fontSize: 12)),
+                                    onTap: () => _copyToClipboard(priceStr, "Price"),
+                                  ),
+                                );
+                              },
+                            ),
+                    ),
+                    const SizedBox(height: 10),
+
+                    // Close Button Area
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: TextButton(
+                        onPressed: () => Navigator.pop(context),
+                        child: const Text("CLOSE", style: TextStyle(color: Colors.blueAccent, fontWeight: FontWeight.bold)),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
           ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text("CLOSE", style: TextStyle(color: Colors.blueAccent)),
-            )
-          ],
         ),
       ),
     );
@@ -170,9 +272,9 @@ Subtotal: \$${_currencyFormat.format(_results!['uTot']!)}
                 ),
                 const SizedBox(height: 16),
                 Text(
-                  "This Cost Estimator was developed by our TST interns as part of their internship project.\n\n"
+                  "Castculator was developed by our TST interns as part of their internship project.\n\n"
                   "Creators:\nRJ Martinez & Anjun Parco\n\n"
-                  "CvSU - Main Campus, 3rd Yr. BS-ECE Students",
+                  "CvSU - Main Campus | 3rd Yr. BS-ECE Students",
                   style: TextStyle(color: isDark ? Colors.white70 : Colors.black54),
                   textAlign: TextAlign.center,
                 ),
@@ -240,8 +342,10 @@ Subtotal: \$${_currencyFormat.format(_results!['uTot']!)}
     double siliconeVolumePerMold = moldVolume - productVolume;
     int moldsNeeded = (qty / AppConfig.shotsPerMold).ceil();
 
-    // Pull from active preset
-    final activePreset = AppConfig.materialPresets[AppConfig.selectedPresetIndex];
+    final activeIndex = AppConfig.selectedPresetIndex < AppConfig.materialPresets.length 
+        ? AppConfig.selectedPresetIndex 
+        : 0;
+    final activePreset = AppConfig.materialPresets[activeIndex];
 
     double sMatUsd = (siliconeVolumePerMold * moldsNeeded / activePreset.siliconeMm3PerKg) * activePreset.siliconeCostKg;
     double sLabUsd = (moldsNeeded * AppConfig.siliconeTime) * (AppConfig.siliconeLaborRate / 60.0);
@@ -251,13 +355,19 @@ Subtotal: \$${_currencyFormat.format(_results!['uTot']!)}
     double uLabUsd = (qty * AppConfig.urethaneTime) * (AppConfig.urethaneLaborRate / 60.0);
     double uTime = (qty * AppConfig.urethaneTime).toDouble();
 
-    final grandTotal = sMatUsd + sLabUsd + uMatUsd + uLabUsd;
+    double paintCostPerPiece = _needsPainting ? 5.00 : 0.0; 
+    double paintTotUsd = paintCostPerPiece * qty;
+
+    final grandTotal = sMatUsd + sLabUsd + uMatUsd + uLabUsd + paintTotUsd;
+    final pricePerPiece = qty > 0 ? grandTotal / qty : 0.0;
 
     setState(() {
       _results = {
         "len": rawL, "wid": rawW, "hgt": rawH, "qty": qty.toDouble(), "molds": moldsNeeded.toDouble(),
         "sMat": sMatUsd, "sLab": sLabUsd, "sTot": sMatUsd + sLabUsd, "sTime": sTime,
         "uMat": uMatUsd, "uLab": uLabUsd, "uTot": uMatUsd + uLabUsd, "uTime": uTime,
+        "paintTot": paintTotUsd,
+        "pricePerPiece": pricePerPiece,
         "grandTotal": grandTotal,
         "grandTotalTime": sTime + uTime,
       };
@@ -348,15 +458,19 @@ Subtotal: \$${_currencyFormat.format(_results!['uTot']!)}
   Widget _resultTimeRow(String title, double totalMinutes) {
     final isDark = AppConfig.isDarkMode;
     int totalMins = totalMinutes.round();
-    int days = totalMins ~/ (24 * 60);
-    int remainingMinsAfterDays = totalMins % (24 * 60);
+    
+    // 8-hour workday logic (480 mins / day)
+    const int minsPerWorkDay = 8 * 60;
+
+    int workDays = totalMins ~/ minsPerWorkDay;
+    int remainingMinsAfterDays = totalMins % minsPerWorkDay;
     int hours = remainingMinsAfterDays ~/ 60;
     int minutes = remainingMinsAfterDays % 60;
 
     List<String> parts = [];
-    if (days > 0) parts.add("$days d");
-    if (hours > 0 || days > 0) parts.add("$hours hr");
-    parts.add("$minutes min");
+    if (workDays > 0) parts.add("$workDays ${workDays == 1 ? 'day' : 'days'}");
+    if (hours > 0) parts.add("$hours hr");
+    if (minutes > 0 || (workDays == 0 && hours == 0)) parts.add("$minutes min");
 
     String formattedTime = parts.join(" ");
 
@@ -435,7 +549,7 @@ Subtotal: \$${_currencyFormat.format(_results!['uTot']!)}
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Text("Volume Price Calculator", style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: textColor)),
+                    Text("Castculator", style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: textColor)),
                     
                     Container(
                       height: 30,
@@ -531,36 +645,49 @@ Subtotal: \$${_currencyFormat.format(_results!['uTot']!)}
                 ),
                 const SizedBox(height: 8),
 
-                // --- Preset Profile Dropdown Selector ---
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
-                  margin: const EdgeInsets.only(bottom: 8),
-                  decoration: BoxDecoration(
-                    color: isDark ? Colors.white.withOpacity(0.05) : Colors.white.withOpacity(0.5),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: DropdownButtonHideUnderline(
-                    child: DropdownButton<int>(
-                      value: AppConfig.selectedPresetIndex,
-                      isExpanded: true,
-                      dropdownColor: isDark ? const Color(0xFF0B101D) : Colors.white,
-                      style: TextStyle(color: textColor, fontSize: 12, fontWeight: FontWeight.w600),
-                      icon: Icon(Icons.arrow_drop_down, color: Colors.blueAccent),
-                      items: AppConfig.materialPresets.asMap().entries.map((entry) {
-                        return DropdownMenuItem<int>(
-                          value: entry.key,
-                          child: Text(entry.value.name),
-                        );
-                      }).toList(),
-                      onChanged: (index) {
-                        if (index != null) {
-                          setState(() {
-                            AppConfig.selectedPresetIndex = index;
-                            if (_results != null) _calculate();
-                          });
-                        }
-                      },
-                    ),
+                // Updated Preset Dropdown Selector
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: LayoutBuilder(
+                    builder: (context, menuConstraints) {
+                      return DropdownMenu<int>(
+                        width: menuConstraints.maxWidth,
+                        initialSelection: AppConfig.selectedPresetIndex < AppConfig.materialPresets.length
+                            ? AppConfig.selectedPresetIndex
+                            : 0,
+                        textStyle: TextStyle(color: textColor, fontSize: 12, fontWeight: FontWeight.w600),
+                        inputDecorationTheme: InputDecorationTheme(
+                          filled: true,
+                          fillColor: isDark ? Colors.white.withOpacity(0.05) : Colors.white.withOpacity(0.5),
+                          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: BorderSide.none,
+                          ),
+                        ),
+                        menuStyle: MenuStyle(
+                          backgroundColor: WidgetStatePropertyAll(isDark ? const Color(0xFF0B101D) : Colors.white),
+                        ),
+                        dropdownMenuEntries: AppConfig.materialPresets.asMap().entries.map((entry) {
+                          return DropdownMenuEntry<int>(
+                            value: entry.key,
+                            label: entry.value.name,
+                            style: MenuItemButton.styleFrom(
+                              foregroundColor: textColor,
+                              textStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500),
+                            ),
+                          );
+                        }).toList(),
+                        onSelected: (index) {
+                          if (index != null) {
+                            setState(() {
+                              AppConfig.selectedPresetIndex = index;
+                              if (_results != null) _calculate();
+                            });
+                          }
+                        },
+                      );
+                    },
                   ),
                 ),
 
@@ -575,6 +702,27 @@ Subtotal: \$${_currencyFormat.format(_results!['uTot']!)}
                     _buildTextField(_widCtrl, 'Width ($unitLabel)', Icons.width_full),
                     _buildTextField(_hgtCtrl, 'Height ($unitLabel)', Icons.height),
                     _buildTextField(_qtyCtrl, 'Quantity (pcs)', Icons.numbers, isQuantity: true),
+                    
+                    Theme(
+                      data: Theme.of(context).copyWith(
+                        unselectedWidgetColor: textColor.withOpacity(0.6),
+                      ),
+                      child: CheckboxListTile(
+                        value: _needsPainting,
+                        dense: true,
+                        activeColor: Colors.blueAccent,
+                        contentPadding: EdgeInsets.zero,
+                        title: Text("Requires Painting / Finishing", style: TextStyle(color: textColor, fontSize: 12)),
+                        controlAffinity: ListTileControlAffinity.leading,
+                        onChanged: (bool? value) {
+                          setState(() {
+                            _needsPainting = value ?? false;
+                            if (_results != null) _calculate();
+                          });
+                        },
+                      ),
+                    ),
+
                     const SizedBox(height: 5),
                     AnimatedScale(
                       scale: _isButtonPressed ? 0.95 : 1.0,
@@ -602,30 +750,50 @@ Subtotal: \$${_currencyFormat.format(_results!['uTot']!)}
                   : Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        // --- Tap to Copy Grand Total Card ---
                         InkWell(
                           onTap: () {
-                            final priceStr = "\$${_currencyFormat.format(_results!['grandTotal']!)}";
+                            final priceStr = "\$${_currencyFormat.format(_results?['grandTotal'] ?? 0.0)}";
                             _copyToClipboard(priceStr, "Grand Total");
                           },
                           borderRadius: BorderRadius.circular(16),
                           child: Container(
-                            padding: const EdgeInsets.all(10),
+                            padding: const EdgeInsets.all(12),
                             decoration: BoxDecoration(
                               color: isDark ? Colors.white.withOpacity(0.05) : Colors.white.withOpacity(0.5),
                               borderRadius: BorderRadius.circular(16),
                               border: Border.all(color: Colors.blueAccent.withOpacity(0.4), width: 1),
                             ),
-                            child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-                              Row(
-                                children: [
-                                  Text("GRAND TOTAL", style: TextStyle(fontWeight: FontWeight.bold, color: textColor, fontSize: 13)),
-                                  const SizedBox(width: 4),
-                                  Icon(Icons.copy, size: 12, color: textColor.withOpacity(0.6)),
-                                ],
-                              ),
-                              Text("\$${_currencyFormat.format(_results!['grandTotal']!)}", style: TextStyle(fontSize: 14, color: textColor, fontWeight: FontWeight.bold))
-                            ]),
+                            child: Column(
+                              children: [
+                                Row(
+                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    Text("PRICE PER PIECE", style: TextStyle(color: textColor.withOpacity(0.8), fontSize: 11, fontWeight: FontWeight.w600)),
+                                    Text(
+                                      "\$${_currencyFormat.format(_results?['pricePerPiece'] ?? 0.0)}", 
+                                      style: const TextStyle(fontSize: 15, color: Colors.blueAccent, fontWeight: FontWeight.bold),
+                                    ),
+                                  ],
+                                ),
+                                const Divider(height: 12),
+                                Row(
+                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    Row(
+                                      children: [
+                                        Text("GRAND TOTAL", style: TextStyle(fontWeight: FontWeight.bold, color: textColor, fontSize: 13)),
+                                        const SizedBox(width: 4),
+                                        Icon(Icons.copy, size: 12, color: textColor.withOpacity(0.6)),
+                                      ],
+                                    ),
+                                    Text(
+                                      "\$${_currencyFormat.format(_results?['grandTotal'] ?? 0.0)}", 
+                                      style: TextStyle(fontSize: 15, color: textColor, fontWeight: FontWeight.bold),
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ),
                           ),
                         ),
                         const SizedBox(height: 5),
@@ -647,23 +815,29 @@ Subtotal: \$${_currencyFormat.format(_results!['uTot']!)}
                                   Padding(
                                       padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
                                       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                                        Text("Dimensions : ${_results!['len']} x ${_results!['wid']} x ${_results!['hgt']} $unitLabel", style: TextStyle(color: textColor, fontSize: 11)),
-                                        Text("Quantity : ${_results!['qty']?.toInt()} | Molds : ${_results!['molds']?.toInt()}", style: TextStyle(color: textColor, fontSize: 11)),
+                                        Text("Dimensions : ${_results?['len']} x ${_results?['wid']} x ${_results?['hgt']} $unitLabel", style: TextStyle(color: textColor, fontSize: 11)),
+                                        Text("Quantity : ${_results?['qty']?.toInt()} | Molds : ${_results?['molds']?.toInt()}", style: TextStyle(color: textColor, fontSize: 11)),
+                                        Text("Painting Included : ${_needsPainting ? 'Yes' : 'No'}", style: TextStyle(color: textColor, fontSize: 11)),
                                         Divider(color: isDark ? Colors.white24 : Colors.black26, height: 10),
                                         const Text("--- SILICONE ---", style: TextStyle(color: Colors.blueAccent, fontSize: 10, fontWeight: FontWeight.bold)),
-                                        _resultRow("Material", _results!['sMat']!),
-                                        _resultRow("Labor", _results!['sLab']!),
-                                        _resultTimeRow("Production Time", _results!['sTime']!),
+                                        _resultRow("Material", _results?['sMat'] ?? 0.0),
+                                        _resultRow("Labor", _results?['sLab'] ?? 0.0),
+                                        _resultTimeRow("Production Time", _results?['sTime'] ?? 0.0),
                                         const SizedBox(height: 4),
                                         const Text("--- URETHANE ---", style: TextStyle(color: Colors.blueAccent, fontSize: 10, fontWeight: FontWeight.bold)),
-                                        _resultRow("Material", _results!['uMat']!),
-                                        _resultRow("Labor", _results!['uLab']!),
-                                        _resultTimeRow("Production Time", _results!['uTime']!),
+                                        _resultRow("Material", _results?['uMat'] ?? 0.0),
+                                        _resultRow("Labor", _results?['uLab'] ?? 0.0),
+                                        _resultTimeRow("Production Time", _results?['uTime'] ?? 0.0),
+                                        if (_needsPainting) ...[
+                                          const SizedBox(height: 4),
+                                          const Text("--- FINISHING ---", style: TextStyle(color: Colors.blueAccent, fontSize: 10, fontWeight: FontWeight.bold)),
+                                          _resultRow("Painting Total", _results?['paintTot'] ?? 0.0),
+                                        ],
                                         Divider(color: isDark ? Colors.white24 : Colors.black26, height: 10),
-                                        _resultTimeRow("Total Production Time", _results!['grandTotalTime']!),
+                                        _resultRow("Price Per Piece", _results?['pricePerPiece'] ?? 0.0),
+                                        _resultTimeRow("Total Production Time", _results?['grandTotalTime'] ?? 0.0),
                                         const SizedBox(height: 8),
                                         
-                                        // --- Export / Share Quote Action Button ---
                                         SizedBox(
                                           width: double.infinity,
                                           height: 32,

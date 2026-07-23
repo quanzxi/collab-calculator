@@ -7,7 +7,7 @@ plugins {
 android {
     namespace = "com.example.calculator"
     compileSdk = 36
-    ndkVersion = "30.0.15729638"
+    ndkVersion = flutter.ndkVersion
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
