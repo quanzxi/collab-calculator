@@ -1,0 +1,45 @@
+name: calculator
+description: "A new Flutter project."
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.12.2
+
+dependencies:
+  flutter:
+    sdk: flutter
+  google_fonts: ^6.2.1
+  intl: ^0.19.0
+  shared_preferences: ^2.2.2
+  share_plus: ^10.0.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+  flutter_launcher_icons: "^0.13.1"
+  flutter_native_splash: "^2.4.0"
+
+flutter_launcher_icons:
+  android: "launcher_icon"
+  image_path: "assets/app logo.png"
+  min_sdk_android: 21
+
+flutter_native_splash:
+  color: "#0F2027"
+  image: "assets/splash screen.png"
+  android_gravity: center
+
+flutter:
+  uses-material-design: true
+  
+  assets:
+    - assets/
+    
+  fonts:
+    - family: Poppins
+      fonts:
+        - asset: assets/fonts/Poppins-Regular.ttf
+        - asset: assets/fonts/Poppins-Bold.ttf
+          weight: 700
